@@ -16,6 +16,10 @@ from app.utils.timeslots import parse_time_slots
 
 from app.schemas.course_detail import CourseDetailOut, CourseTimeOut
 from app.utils.excel_export import courses_to_xlsx_bytes, make_filename
+from app.models.favorite import Favorite
+from app.utils.auth import get_current_user
+from sqlalchemy import exists, and_
+
 router = APIRouter(prefix="/courses", tags=["Courses"])
 
 import logging
@@ -25,8 +29,8 @@ logger = logging.getLogger("app.admin")
 @router.get("")
 def search_courses(
     db: Session = Depends(get_db),
+    user=Depends(get_current_user),  #  需要登入才能知道是否收藏
 
-    
     keyword: Optional[str] = Query(None, description="課程名稱關鍵字（中/英）"),
     semester: Optional[str] = Query(None, description="學期，例如 1141"),
     required_type: Optional[str] = Query(None, description="課別，例如 專業必修(系所)"),
@@ -35,27 +39,37 @@ def search_courses(
     category: Optional[str] = Query(None, description="課程分類（category 欄位）"),
     department: Optional[str] = Query(None, description="系所代碼（department_id）"),
     time_slots: list[str] | None = Query(None, description="多選: 1-1,1-2,3-5..."),
-    
+
     weekday: Optional[int] = Query(None, ge=1, le=7, description="上課星期 1~7"),
     start_section: Optional[int] = Query(None, ge=1, le=15, description="起始節次"),
     end_section: Optional[int] = Query(None, ge=1, le=15, description="結束節次"),
 
-    #分頁
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
 ):
-    # 先 join teacher/department，再視需要 join course_time
+    #  EXISTS：這門課是否已被此 user 收藏
+    is_fav_expr = exists().where(
+        and_(
+            Favorite.user_id == user.id,
+            Favorite.course_id == Course.id,
+        )
+    )
+
     q = (
-        db.query(Course, Teacher.name.label("teacher_name"), Department.name.label("department_name"))
+        db.query(
+            Course,
+            Teacher.name.label("teacher_name"),
+            Department.name.label("department_name"),
+            is_fav_expr.label("is_favorite"),
+        )
         .outerjoin(Teacher, Teacher.id == Course.teacher_id)
         .outerjoin(Department, Department.id == Course.department_id)
     )
 
-    # 如果要查 weekday/section，才 join CourseTime（避免查詢變慢或產生重複列）
+    # 如果要查 weekday/section，才 join CourseTime
     if weekday is not None or start_section is not None or end_section is not None:
         q = q.join(CourseTime, CourseTime.course_id == Course.id)
 
-    #中/英課名模糊查詢
     if keyword:
         k = f"%{keyword.strip()}%"
         q = q.filter(or_(Course.name_zh.ilike(k), Course.name_en.ilike(k)))
@@ -75,18 +89,16 @@ def search_courses(
     if department:
         q = q.filter(Course.department_id == department)
 
-    # 代碼 or 姓名模糊
     if teacher:
         t = teacher.strip()
         q = q.filter(or_(Course.teacher_id == t, Teacher.name.ilike(f"%{t}%")))
 
-    # weekday/section：時間篩選
     if weekday is not None:
         q = q.filter(CourseTime.weekday == weekday)
+
     slots = parse_time_slots(time_slots)
     if slots:
         q = q.join(CourseTime, CourseTime.course_id == Course.id)
-        # OR：符合任何一個被選格子
         slot_filters = [
             and_(
                 CourseTime.weekday == w,
@@ -97,7 +109,6 @@ def search_courses(
         ]
         q = q.filter(or_(*slot_filters)).distinct()
 
-
     # 衝堂判斷
     if start_section is not None and end_section is not None:
         q = q.filter(and_(CourseTime.start_section <= end_section, CourseTime.end_section >= start_section))
@@ -106,21 +117,21 @@ def search_courses(
     elif end_section is not None:
         q = q.filter(CourseTime.start_section <= end_section)
 
-    # 如果 join CourseTime，可能一門課多筆時間 -> 會重複列
-    if weekday is not None or start_section is not None or end_section is not None:
+    # 有 join CourseTime 可能重複 -> distinct on Course.id
+    if weekday is not None or start_section is not None or end_section is not None or slots:
         q = q.distinct(Course.id)
 
     total = q.count()
 
     rows = (
-        q.order_by(Course.id.asc())
+        q.order_by(Course.id.asc())   #  DISTINCT ON 需要以 Course.id 開頭排序
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
     )
 
     items = []
-    for course, teacher_name, dept_name in rows:
+    for course, teacher_name, dept_name, is_favorite in rows:
         items.append({
             "id": course.id,
             "name_zh": course.name_zh,
@@ -139,6 +150,9 @@ def search_courses(
             "limit_min": course.limit_min,
             "limit_max": course.limit_max,
             "raw_remark": course.raw_remark,
+
+            #  新增欄位
+            "is_favorite": bool(is_favorite),
         })
 
     return {"page": page, "page_size": page_size, "total": total, "items": items}
