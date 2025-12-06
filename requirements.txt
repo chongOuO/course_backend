@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+python-dotenv
+sqlalchemy
+psycopg2-binary
+pydantic
+pandas
+openpyxl
+python-jose
+passlib[bcrypt]
+pydantic-settings
+python-multipart
+bcrypt<5
+openpyxl
+pydantic[email]
