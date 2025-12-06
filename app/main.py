@@ -29,7 +29,7 @@ app.include_router(profile.router)
 # CORS 設定
 origins = [
     "http://localhost:3000",   
-    "http://127.0.0.1:3000S",
+    "http://127.0.0.1:3000",
 ]
 
 @app.middleware("http")
