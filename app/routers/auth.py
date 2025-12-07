@@ -1,7 +1,9 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-
+import hashlib
+from datetime import datetime, timedelta
+import secrets
 from app.database import get_db
 from app.utils.hashing import hash_password, verify_password
 from app.utils.auth import create_access_token, get_current_user
@@ -13,7 +15,8 @@ from datetime import datetime, timezone
 from app.models.student_profile import StudentProfile
 
 from app.schemas.change_password import ChangePasswordIn
-
+from app.models.password_reset_token import PasswordResetToken
+from app.schemas.password_reset import ForgotPasswordIn, ResetPasswordIn
 
 
 import logging
@@ -21,6 +24,11 @@ logger = logging.getLogger("app.admin")
 
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
+
+def sha256(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+RESET_TTL_MINUTES = 15
 
 
 # 註冊
@@ -65,23 +73,70 @@ def get_me(current_user: User = Depends(get_current_user)):
     return current_user
 
 
-@router.post("/change-password")
-def change_password(
-    body: ChangePasswordIn,
-    db: Session = Depends(get_db),
-    user=Depends(get_current_user),
-):
-    
+@router.post("/forgot-password")
+def forgot_password(body: ForgotPasswordIn, db: Session = Depends(get_db)):
+    username = body.username.strip()
+
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        # 為了避免被枚舉帳號，正式環境通常也回 200
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # 產生一次性 token（給使用者）
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = sha256(raw_token)
+
+    expires_at = datetime.utcnow() + timedelta(minutes=RESET_TTL_MINUTES)
+
+    row = db.query(PasswordResetToken).filter(PasswordResetToken.user_id == user.id).first()
+    if row:
+        row.token_hash = token_hash
+        row.expires_at = expires_at
+        row.used_at = None
+    else:
+        db.add(PasswordResetToken(
+            user_id=user.id,
+            token_hash=token_hash,
+            expires_at=expires_at,
+        ))
+
+    db.commit()
+
+    #  測試用：直接回傳 token
+    return {
+        "detail": "reset token generated",
+        "username": username,
+        "token": raw_token,
+        "expires_in_minutes": RESET_TTL_MINUTES,
+    }
+
+
+@router.post("/reset-password")
+def reset_password(body: ResetPasswordIn, db: Session = Depends(get_db)):
+    # body: ResetPasswordIn
     if len(body.new_password.encode("utf-8")) > 72:
         raise HTTPException(status_code=400, detail="Password too long (max 72 bytes for bcrypt).")
 
-    db_user = db.query(User).filter(User.id == user.id).first()
-    if not db_user:
+    user = db.query(User).filter(User.username == body.username.strip()).first()
+    if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    if not verify_password(body.old_password, db_user.password_hash):
-        raise HTTPException(status_code=400, detail="Old password is incorrect")
+    row = db.query(PasswordResetToken).filter(PasswordResetToken.user_id == user.id).first()
+    if not row:
+        raise HTTPException(status_code=400, detail="No reset token. Call /auth/forgot-password first.")
 
-    db_user.password_hash = hash_password(body.new_password)
+    if row.used_at is not None:
+        raise HTTPException(status_code=400, detail="Token already used")
+
+    if row.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Token expired")
+
+    if row.token_hash != sha256(body.token):
+        raise HTTPException(status_code=400, detail="Invalid token")
+
+    #  通過驗證，重設密碼
+    user.password_hash = hash_password(body.new_password)
+    row.used_at = datetime.utcnow()
+
     db.commit()
-    return {"detail": "Password changed"}
+    return {"detail": "Password reset"}
