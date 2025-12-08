@@ -138,11 +138,16 @@ def search_courses(
         q = q.filter(or_(*slot_filters))
 
     if start_section is not None and end_section is not None:
-        q = q.filter(and_(CourseTime.start_section <= end_section, CourseTime.end_section >= start_section))
+        q = q.filter(
+            and_(
+                CourseTime.start_section >= start_section,
+                CourseTime.end_section <= end_section,
+            )
+        )
     elif start_section is not None:
-        q = q.filter(CourseTime.end_section >= start_section)
+        q = q.filter(CourseTime.start_section >= start_section)
     elif end_section is not None:
-        q = q.filter(CourseTime.start_section <= end_section)
+        q = q.filter(CourseTime.end_section <= end_section)
 
     if weekday is not None or start_section is not None or end_section is not None or slots:
         q = q.distinct(Course.id)
