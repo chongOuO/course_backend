@@ -40,8 +40,7 @@ def list_announcements(
     """
      公告列表（學生可用）
     - 預設只顯示 is_active = true
-    - 不做 start_at/end_at 時間限制（避免你現在因時區/空值導致全部被濾掉）
-      你要做時間排程顯示時，再加回去即可
+    office course_change department activity
     """
     query = db.query(Announcement)
 
