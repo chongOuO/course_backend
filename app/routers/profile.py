@@ -7,7 +7,8 @@ from app.database import get_db
 from app.utils.auth import get_current_user
 from app.models.student_profile import StudentProfile
 from app.schemas.profile import ProfileOut, ProfileUpdateIn
-
+from app.models.department import Department
+from app.models.user import User
 import logging
 logger = logging.getLogger("app.admin")
 
@@ -40,7 +41,23 @@ def _ensure_student_profile(db: Session, user_id: int, username: str) -> Student
 @router.get("/me", response_model=ProfileOut)
 def get_my_profile(db: Session = Depends(get_db), user=Depends(get_current_user)):
     prof = _ensure_student_profile(db, user.id, getattr(user, "username", str(user.id)))
-    return prof
+
+    
+    row = (
+        db.query(User.department_id, Department.name)
+        .outerjoin(Department, Department.id == User.department_id)
+        .filter(User.id == user.id)
+        .first()
+    )
+
+    dept_id = row[0] if row else None
+    dept_name = row[1] if row else None
+
+    base = ProfileOut.model_validate(prof, from_attributes=True)
+    return base.model_copy(update={
+        "department_id": dept_id,
+        "department_name": dept_name,
+    })
 
 
 @router.put("/me", response_model=ProfileOut)
