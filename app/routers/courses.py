@@ -18,7 +18,10 @@ from app.schemas.course_detail import CourseDetailOut, CourseTimeOut
 from app.utils.excel_export import courses_to_xlsx_bytes, make_filename
 from app.models.favorite import Favorite
 from app.utils.auth import get_current_user
-from sqlalchemy import exists, and_
+from sqlalchemy import exists
+from sqlalchemy import func, cast,tuple_
+from sqlalchemy.dialects.postgresql import JSONB, aggregate_order_by
+
 
 router = APIRouter(prefix="/courses", tags=["Courses"])
 
@@ -29,7 +32,7 @@ logger = logging.getLogger("app.admin")
 @router.get("")
 def search_courses(
     db: Session = Depends(get_db),
-    user=Depends(get_current_user),  #  需要登入才能知道是否收藏
+    user=Depends(get_current_user),
 
     keyword: Optional[str] = Query(None, description="課程名稱關鍵字（中/英）"),
     semester: Optional[str] = Query(None, description="學期，例如 1141"),
@@ -47,12 +50,35 @@ def search_courses(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
 ):
-    #  EXISTS：這門課是否已被此 user 收藏
+    # 是否收藏
     is_fav_expr = exists().where(
         and_(
             Favorite.user_id == user.id,
             Favorite.course_id == Course.id,
         )
+    )
+
+    # times 聚合
+    times_sq = (
+        db.query(
+            CourseTime.course_id.label("cid"),
+            func.coalesce(
+                func.jsonb_agg(
+                    aggregate_order_by(
+                        func.jsonb_build_object(
+                            "weekday", CourseTime.weekday,
+                            "start_section", CourseTime.start_section,
+                            "end_section", CourseTime.end_section,
+                            "classroom", CourseTime.classroom,
+                        ),
+                        tuple_(CourseTime.weekday, CourseTime.start_section),
+                    )
+                ),
+                cast("[]", JSONB),
+            ).label("times"),
+        )
+        .group_by(CourseTime.course_id)
+        .subquery()
     )
 
     q = (
@@ -61,15 +87,14 @@ def search_courses(
             Teacher.name.label("teacher_name"),
             Department.name.label("department_name"),
             is_fav_expr.label("is_favorite"),
+            times_sq.c.times.label("times"),
         )
         .outerjoin(Teacher, Teacher.id == Course.teacher_id)
         .outerjoin(Department, Department.id == Course.department_id)
+        .outerjoin(times_sq, times_sq.c.cid == Course.id)
     )
 
-    # 如果要查 weekday/section，才 join CourseTime
-    if weekday is not None or start_section is not None or end_section is not None:
-        q = q.join(CourseTime, CourseTime.course_id == Course.id)
-
+    # ===== 篩選 =====
     if keyword:
         k = f"%{keyword.strip()}%"
         q = q.filter(or_(Course.name_zh.ilike(k), Course.name_en.ilike(k)))
@@ -93,12 +118,15 @@ def search_courses(
         t = teacher.strip()
         q = q.filter(or_(Course.teacher_id == t, Teacher.name.ilike(f"%{t}%")))
 
+    # ===== 時間篩選（需要 join CourseTime 才能 filter）=====
+    slots = parse_time_slots(time_slots)
+    if weekday is not None or start_section is not None or end_section is not None or slots:
+        q = q.join(CourseTime, CourseTime.course_id == Course.id)
+
     if weekday is not None:
         q = q.filter(CourseTime.weekday == weekday)
 
-    slots = parse_time_slots(time_slots)
     if slots:
-        q = q.join(CourseTime, CourseTime.course_id == Course.id)
         slot_filters = [
             and_(
                 CourseTime.weekday == w,
@@ -107,9 +135,8 @@ def search_courses(
             )
             for (w, sec) in slots
         ]
-        q = q.filter(or_(*slot_filters)).distinct()
+        q = q.filter(or_(*slot_filters))
 
-    # 衝堂判斷
     if start_section is not None and end_section is not None:
         q = q.filter(and_(CourseTime.start_section <= end_section, CourseTime.end_section >= start_section))
     elif start_section is not None:
@@ -117,21 +144,20 @@ def search_courses(
     elif end_section is not None:
         q = q.filter(CourseTime.start_section <= end_section)
 
-    # 有 join CourseTime 可能重複 -> distinct on Course.id
     if weekday is not None or start_section is not None or end_section is not None or slots:
         q = q.distinct(Course.id)
 
     total = q.count()
 
     rows = (
-        q.order_by(Course.id.asc())   #  DISTINCT ON 需要以 Course.id 開頭排序
+        q.order_by(Course.id.asc())
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
     )
 
     items = []
-    for course, teacher_name, dept_name, is_favorite in rows:
+    for course, teacher_name, dept_name, is_favorite, times in rows:
         items.append({
             "id": course.id,
             "name_zh": course.name_zh,
@@ -150,12 +176,12 @@ def search_courses(
             "limit_min": course.limit_min,
             "limit_max": course.limit_max,
             "raw_remark": course.raw_remark,
-
-            #  新增欄位
             "is_favorite": bool(is_favorite),
+            "times": times or [],
         })
 
     return {"page": page, "page_size": page_size, "total": total, "items": items}
+
 @router.get("/export")
 def export_courses_excel(
     db: Session = Depends(get_db),
