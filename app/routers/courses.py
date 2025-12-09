@@ -187,6 +187,154 @@ def search_courses(
 
     return {"page": page, "page_size": page_size, "total": total, "items": items}
 
+@router.get("/public")
+def search_courses_public(
+    db: Session = Depends(get_db),
+
+    keyword: Optional[str] = Query(None, description="課程名稱關鍵字（中/英）"),
+    semester: Optional[str] = Query(None, description="學期，例如 1141"),
+    required_type: Optional[str] = Query(None, description="課別，例如 專業必修(系所)"),
+    grade: Optional[int] = Query(None, description="年級"),
+    teacher: Optional[str] = Query(None, description="教師（可用代碼或姓名關鍵字）"),
+    category: Optional[str] = Query(None, description="課程分類（category 欄位）"),
+    department: Optional[str] = Query(None, description="系所代碼（department_id）"),
+    time_slots: list[str] | None = Query(None, description="多選: 1-1,1-2,3-5..."),
+
+    weekday: Optional[int] = Query(None, ge=1, le=7, description="上課星期 1~7"),
+    start_section: Optional[int] = Query(None, ge=1, le=15, description="起始節次"),
+    end_section: Optional[int] = Query(None, ge=1, le=15, description="結束節次"),
+
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+):
+    # times 聚合
+    times_sq = (
+        db.query(
+            CourseTime.course_id.label("cid"),
+            func.coalesce(
+                func.jsonb_agg(
+                    aggregate_order_by(
+                        func.jsonb_build_object(
+                            "weekday", CourseTime.weekday,
+                            "start_section", CourseTime.start_section,
+                            "end_section", CourseTime.end_section,
+                            "classroom", CourseTime.classroom,
+                        ),
+                        tuple_(CourseTime.weekday, CourseTime.start_section),
+                    )
+                ),
+                cast("[]", JSONB),
+            ).label("times"),
+        )
+        .group_by(CourseTime.course_id)
+        .subquery()
+    )
+
+    q = (
+        db.query(
+            Course,
+            Teacher.name.label("teacher_name"),
+            Department.name.label("department_name"),
+            times_sq.c.times.label("times"),
+        )
+        .outerjoin(Teacher, Teacher.id == Course.teacher_id)
+        .outerjoin(Department, Department.id == Course.department_id)
+        .outerjoin(times_sq, times_sq.c.cid == Course.id)
+    )
+
+    # ===== 篩選 =====
+    if keyword:
+        k = f"%{keyword.strip()}%"
+        q = q.filter(or_(Course.name_zh.ilike(k), Course.name_en.ilike(k)))
+
+    if semester:
+        q = q.filter(Course.semester == semester)
+
+    if required_type:
+        q = q.filter(Course.required_type == required_type)
+
+    if grade is not None:
+        q = q.filter(Course.grade == grade)
+
+    if category:
+        q = q.filter(Course.category == category)
+
+    if department:
+        q = q.filter(Course.department_id == department)
+
+    if teacher:
+        t = teacher.strip()
+        q = q.filter(or_(Course.teacher_id == t, Teacher.name.ilike(f"%{t}%")))
+
+    # ===== 時間篩選（需要 join CourseTime 才能 filter）=====
+    slots = parse_time_slots(time_slots)
+    if weekday is not None or start_section is not None or end_section is not None or slots:
+        q = q.join(CourseTime, CourseTime.course_id == Course.id)
+
+    if weekday is not None:
+        q = q.filter(CourseTime.weekday == weekday)
+
+    if slots:
+        slot_filters = [
+            and_(
+                CourseTime.weekday == w,
+                CourseTime.start_section <= sec,
+                CourseTime.end_section >= sec,
+            )
+            for (w, sec) in slots
+        ]
+        q = q.filter(or_(*slot_filters))
+
+    # 範圍內：8~9 不包含 8~10
+    if start_section is not None and end_section is not None:
+        q = q.filter(
+            and_(
+                CourseTime.start_section >= start_section,
+                CourseTime.end_section <= end_section,
+            )
+        )
+    elif start_section is not None:
+        q = q.filter(CourseTime.start_section >= start_section)
+    elif end_section is not None:
+        q = q.filter(CourseTime.end_section <= end_section)
+
+    if weekday is not None or start_section is not None or end_section is not None or slots:
+        q = q.distinct(Course.id)
+
+    total = q.count()
+
+    rows = (
+        q.order_by(Course.id.asc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    items = []
+    for course, teacher_name, dept_name, times in rows:
+        items.append({
+            "id": course.id,
+            "name_zh": course.name_zh,
+            "name_en": course.name_en,
+            "semester": course.semester,
+            "grade": course.grade,
+            "required_type": course.required_type,
+            "category": course.category,
+            "department_id": course.department_id,
+            "department_name": dept_name,
+            "teacher_id": course.teacher_id,
+            "teacher_name": teacher_name,
+            "credit": course.credit,
+            "class_group": course.class_group,
+            "group_code": course.group_code,
+            "limit_min": course.limit_min,
+            "limit_max": course.limit_max,
+            "raw_remark": course.raw_remark,
+            "times": times or [],
+        })
+
+    return {"page": page, "page_size": page_size, "total": total, "items": items}
+
 @router.get("/export")
 def export_courses_excel(
     db: Session = Depends(get_db),
