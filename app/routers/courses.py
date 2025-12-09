@@ -40,7 +40,10 @@ def search_courses(
     grade: Optional[int] = Query(None, description="年級"),
     teacher: Optional[str] = Query(None, description="教師（可用代碼或姓名關鍵字）"),
     category: Optional[str] = Query(None, description="課程分類（category 欄位）"),
-    department: Optional[str] = Query(None, description="系所代碼（department_id）"),
+
+    #  這個參數同時支援「系所代碼」或「系所名稱」
+    department: Optional[str] = Query(None, description="系所（可輸入代碼或名稱關鍵字）"),
+
     time_slots: list[str] | None = Query(None, description="多選: 1-1,1-2,3-5..."),
 
     weekday: Optional[int] = Query(None, ge=1, le=7, description="上課星期 1~7"),
@@ -85,6 +88,7 @@ def search_courses(
         db.query(
             Course,
             Teacher.name.label("teacher_name"),
+            Department.id.label("department_id"),
             Department.name.label("department_name"),
             is_fav_expr.label("is_favorite"),
             times_sq.c.times.label("times"),
@@ -111,8 +115,13 @@ def search_courses(
     if category:
         q = q.filter(Course.category == category)
 
+    
     if department:
-        q = q.filter(Course.department_id == department)
+        d = department.strip()
+        q = q.filter(or_(
+            Course.department_id == d,          # 代碼
+            Department.name.ilike(f"%{d}%")     # 名稱
+        ))
 
     if teacher:
         t = teacher.strip()
@@ -137,6 +146,7 @@ def search_courses(
         ]
         q = q.filter(or_(*slot_filters))
 
+    # 範圍內
     if start_section is not None and end_section is not None:
         q = q.filter(
             and_(
@@ -162,7 +172,7 @@ def search_courses(
     )
 
     items = []
-    for course, teacher_name, dept_name, is_favorite, times in rows:
+    for course, teacher_name, dept_id, dept_name, is_favorite, times in rows:
         items.append({
             "id": course.id,
             "name_zh": course.name_zh,
@@ -171,8 +181,11 @@ def search_courses(
             "grade": course.grade,
             "required_type": course.required_type,
             "category": course.category,
-            "department_id": course.department_id,
+
+           
+            "department_id": dept_id,
             "department_name": dept_name,
+
             "teacher_id": course.teacher_id,
             "teacher_name": teacher_name,
             "credit": course.credit,
@@ -197,7 +210,10 @@ def search_courses_public(
     grade: Optional[int] = Query(None, description="年級"),
     teacher: Optional[str] = Query(None, description="教師（可用代碼或姓名關鍵字）"),
     category: Optional[str] = Query(None, description="課程分類（category 欄位）"),
-    department: Optional[str] = Query(None, description="系所代碼（department_id）"),
+
+   
+    department: Optional[str] = Query(None, description="系所（可輸入代碼或名稱關鍵字）"),
+
     time_slots: list[str] | None = Query(None, description="多選: 1-1,1-2,3-5..."),
 
     weekday: Optional[int] = Query(None, ge=1, le=7, description="上課星期 1~7"),
@@ -234,6 +250,7 @@ def search_courses_public(
         db.query(
             Course,
             Teacher.name.label("teacher_name"),
+            Department.id.label("department_id"),
             Department.name.label("department_name"),
             times_sq.c.times.label("times"),
         )
@@ -259,8 +276,13 @@ def search_courses_public(
     if category:
         q = q.filter(Course.category == category)
 
+    #  department：代碼或名稱
     if department:
-        q = q.filter(Course.department_id == department)
+        d = department.strip()
+        q = q.filter(or_(
+            Course.department_id == d,
+            Department.name.ilike(f"%{d}%")
+        ))
 
     if teacher:
         t = teacher.strip()
@@ -285,7 +307,7 @@ def search_courses_public(
         ]
         q = q.filter(or_(*slot_filters))
 
-    # 範圍內：8~9 不包含 8~10
+    # 範圍內
     if start_section is not None and end_section is not None:
         q = q.filter(
             and_(
@@ -311,7 +333,7 @@ def search_courses_public(
     )
 
     items = []
-    for course, teacher_name, dept_name, times in rows:
+    for course, teacher_name, dept_id, dept_name, times in rows:
         items.append({
             "id": course.id,
             "name_zh": course.name_zh,
@@ -320,8 +342,11 @@ def search_courses_public(
             "grade": course.grade,
             "required_type": course.required_type,
             "category": course.category,
-            "department_id": course.department_id,
+
+            
+            "department_id": dept_id,
             "department_name": dept_name,
+
             "teacher_id": course.teacher_id,
             "teacher_name": teacher_name,
             "credit": course.credit,
