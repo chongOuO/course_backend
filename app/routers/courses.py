@@ -364,23 +364,25 @@ def search_courses_public(
 def export_courses_excel(
     db: Session = Depends(get_db),
 
-    keyword: Optional[str] = Query(None),
-    semester: Optional[str] = Query(None),
-    grade: Optional[int] = Query(None),
-    department_id: Optional[str] = Query(None),
-    teacher_id: Optional[str] = Query(None),
-    category: Optional[str] = Query(None),
-    required_type: Optional[str] = Query(None),
-    credit: Optional[int] = Query(None),
-    limit_max: Optional[int] = Query(None),
+    
+    keyword: Optional[str] = Query(None, description="課程名稱關鍵字（中/英）"),
+    semester: Optional[str] = Query(None, description="學期，例如 1141"),
+    required_type: Optional[str] = Query(None, description="課別，例如 專業必修(系所)"),
+    grade: Optional[int] = Query(None, description="年級"),
+    teacher: Optional[str] = Query(None, description="教師（可用代碼或姓名關鍵字）"),
+    category: Optional[str] = Query(None, description="課程分類（category 欄位）"),
+    department: Optional[str] = Query(None, description="系所（可輸入代碼或名稱關鍵字）"),
 
-    # 多選時間格：time_slots=1-1&time_slots=1-2...
     time_slots: list[str] | None = Query(None, description="多選: 1-1,1-2,3-5..."),
+
+    weekday: Optional[int] = Query(None, ge=1, le=7, description="上課星期 1~7"),
+    start_section: Optional[int] = Query(None, ge=1, le=15, description="起始節次"),
+    end_section: Optional[int] = Query(None, ge=1, le=15, description="結束節次"),
 ):
     """
     匯出「課程查詢結果」成 Excel（.xlsx）
     """
-    # 以 join 方式把 teacher/department 名稱也一起帶出
+
     q = (
         db.query(
             Course,
@@ -391,29 +393,49 @@ def export_courses_excel(
         .outerjoin(Department, Department.id == Course.department_id)
     )
 
+    # ===== 一般篩選（同搜尋課程）=====
     if keyword:
-        like = f"%{keyword}%"
-        q = q.filter(or_(Course.name_zh.ilike(like), Course.name_en.ilike(like)))
+        k = f"%{keyword.strip()}%"
+        q = q.filter(or_(Course.name_zh.ilike(k), Course.name_en.ilike(k)))
+
     if semester:
         q = q.filter(Course.semester == semester)
-    if grade is not None:
-        q = q.filter(Course.grade == grade)
-    if department_id:
-        q = q.filter(Course.department_id == department_id)
-    if teacher_id:
-        q = q.filter(Course.teacher_id == teacher_id)
-    if category:
-        q = q.filter(Course.category == category)
+
     if required_type:
         q = q.filter(Course.required_type == required_type)
-    if credit is not None:
-        q = q.filter(Course.credit == credit)
-    if limit_max is not None:
-        q = q.filter(Course.limit_max == limit_max)
 
+    if grade is not None:
+        q = q.filter(Course.grade == grade)
+
+    if category:
+        q = q.filter(Course.category == category)
+
+    # department：代碼 or 名稱關鍵字
+    if department:
+        d = department.strip()
+        q = q.filter(or_(
+            Course.department_id == d,
+            Department.name.ilike(f"%{d}%")
+        ))
+
+    # teacher：代碼 or 姓名關鍵字
+    if teacher:
+        t = teacher.strip()
+        q = q.filter(or_(
+            Course.teacher_id == t,
+            Teacher.name.ilike(f"%{t}%")
+        ))
+
+    # 時間篩選（同搜尋課程
     slots = parse_time_slots(time_slots)
-    if slots:
+
+    if weekday is not None or start_section is not None or end_section is not None or slots:
         q = q.join(CourseTime, CourseTime.course_id == Course.id)
+
+    if weekday is not None:
+        q = q.filter(CourseTime.weekday == weekday)
+
+    if slots:
         slot_filters = [
             and_(
                 CourseTime.weekday == w,
@@ -422,14 +444,28 @@ def export_courses_excel(
             )
             for (w, sec) in slots
         ]
-        q = q.filter(or_(*slot_filters)).distinct()
+        q = q.filter(or_(*slot_filters))
+
+    # 範圍內
+    if start_section is not None and end_section is not None:
+        q = q.filter(
+            and_(
+                CourseTime.start_section >= start_section,
+                CourseTime.end_section <= end_section,
+            )
+        )
+    elif start_section is not None:
+        q = q.filter(CourseTime.start_section >= start_section)
+    elif end_section is not None:
+        q = q.filter(CourseTime.end_section <= end_section)
+
+    if weekday is not None or start_section is not None or end_section is not None or slots:
+        q = q.distinct(Course.id)
 
     q = q.order_by(Course.id.asc())
-
     results = q.all()
 
-    # 把每門課的 times 彙整成字串（星期X 第a~b節）
-    # 為了避免 N+1，這裡再抓一次 times
+    # ===== times map（避免 N+1）=====
     course_ids = [c.id for (c, _tname, _dname) in results]
     times_map = {}
     if course_ids:
@@ -452,7 +488,6 @@ def export_courses_excel(
                 parts.append(f"{t.weekday}-{t.start_section}~{t.end_section}")
         return ", ".join(parts)
 
-    # Excel rows（欄位你可以依你介面調整）
     rows_for_excel = []
     for course, teacher_name, dept_name in results:
         rows_for_excel.append({
@@ -478,69 +513,6 @@ def export_courses_excel(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
-
-@router.get("/{course_id}", response_model=CourseDetailOut)
-def get_course_detail(course_id: str, db: Session = Depends(get_db)):
-    # 先抓 course + teacher_name + department_name
-    row = (
-        db.query(
-            Course,
-            Teacher.name.label("teacher_name"),
-            Department.name.label("department_name"),
-        )
-        .outerjoin(Teacher, Teacher.id == Course.teacher_id)
-        .outerjoin(Department, Department.id == Course.department_id)
-        .filter(Course.id == course_id)
-        .first()
-    )
-
-    if not row:
-        raise HTTPException(status_code=404, detail="Course not found")
-
-    course, teacher_name, department_name = row
-
-    #抓課程時間
-    times = (
-        db.query(CourseTime)
-        .filter(CourseTime.course_id == course_id)
-        .order_by(CourseTime.weekday.asc(), CourseTime.start_section.asc())
-        .all()
-    )
-
-    #點讚/留言統計：如果你有相關表再打開
-    course_like_count = 0
-    comment_count = 0
-
-
-    return CourseDetailOut(
-        # course 欄位
-        id=course.id,
-        name_zh=course.name_zh,
-        name_en=course.name_en,
-        semester=course.semester,
-        grade=course.grade,
-        class_group=course.class_group,
-        group_code=course.group_code,
-        credit=course.credit,
-        required_type=course.required_type,
-        category=course.category,
-        limit_min=course.limit_min,
-        limit_max=course.limit_max,
-        chinese_summary=course.chinese_summary,
-        english_summary=course.english_summary,
-        raw_remark=course.raw_remark,
-
-        department_id=course.department_id,
-        department_name=department_name,
-        teacher_id=course.teacher_id,
-        teacher_name=teacher_name,
-
-        times=[CourseTimeOut.model_validate(t) for t in times],
-
-        course_like_count=course_like_count,
-        comment_count=comment_count,
-    )
-
 
 #給前端下拉選單用
 @router.get("/meta/teachers")
