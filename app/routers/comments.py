@@ -121,3 +121,16 @@ def toggle_comment_like(comment_id: int, db: Session = Depends(get_db), user=Dep
 
     like_count = db.query(func.count()).select_from(CommentLike).filter(CommentLike.comment_id == comment_id).scalar()
     return {"liked": liked, "like_count": like_count}
+
+@router.delete("/comments/{comment_id}")
+def delete_comment(comment_id: int, db: Session = Depends(get_db), user=Depends (get_current_user)):
+    comment = db.query(Comment).filter(Comment.id == comment_id).first()
+    if not comment:
+        raise HTTPException(status_code=404, detail="Comment not found")
+
+    if comment.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this comment")
+
+    db.delete(comment)
+    db.commit()
+    return {"detail": "Comment deleted"}

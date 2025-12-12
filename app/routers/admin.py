@@ -240,7 +240,7 @@ class AdminUserUpdateIn(BaseModel):
 
 
 class AdminResetPasswordIn(BaseModel):
-    new_password: str = Field(..., min_length=6, max_length=72)
+    new_password: str = Field(..., min_length=0, max_length=72)
 
 
 def _to_out(u: User, p: Optional[StudentProfile]) -> AdminUserOut:
@@ -269,9 +269,6 @@ def admin_list_users(
     email: Optional[str] = Query(None, description="Email"),
 
 
-    keyword: Optional[str] = Query(None, description="模糊搜尋 username / student_no / full_name / department / email"),
-
-
     role: Optional[str] = Query(None, description="admin/student"),
     is_active: Optional[bool] = Query(None),
 
@@ -293,18 +290,7 @@ def admin_list_users(
     if email:
         q = q.filter(StudentProfile.email.ilike(f"%{email}%"))
 
-    # keyword模糊搜尋
-    if keyword:
-        like = f"%{keyword}%"
-        q = q.filter(
-            or_(
-                User.username.ilike(like),
-                StudentProfile.student_no.ilike(like),
-                StudentProfile.full_name.ilike(like),
-                StudentProfile.department.ilike(like),
-                StudentProfile.email.ilike(like),
-            )
-        )
+   
 
     if role:
         q = q.filter(User.role == role)
@@ -395,9 +381,8 @@ def admin_reset_password(
     db.commit()
     return {"detail": "password updated"}
 
-
-@router.patch("/users/{user_id}/deactivate")
-def admin_deactivate_user(
+@router.delete("/users/{user_id}")
+def admin_delete_user(
     user_id: int,
     db: Session = Depends(get_db),
     admin=Depends(require_admin),
@@ -405,20 +390,7 @@ def admin_deactivate_user(
     u = db.query(User).filter(User.id == user_id).first()
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
-    u.is_active = False
-    db.commit()
-    return {"detail": "deactivated"}
 
-
-@router.patch("/users/{user_id}/activate")
-def admin_activate_user(
-    user_id: int,
-    db: Session = Depends(get_db),
-    admin=Depends(require_admin),
-):
-    u = db.query(User).filter(User.id == user_id).first()
-    if not u:
-        raise HTTPException(status_code=404, detail="User not found")
-    u.is_active = True
+    db.delete(u)
     db.commit()
-    return {"detail": "activated"}
+    return {"detail": "user deleted"}

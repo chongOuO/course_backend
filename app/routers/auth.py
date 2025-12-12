@@ -115,7 +115,7 @@ def forgot_password(body: ForgotPasswordIn, db: Session = Depends(get_db)):
 def reset_password(body: ResetPasswordIn, db: Session = Depends(get_db)):
     # body: ResetPasswordIn
     if len(body.new_password.encode("utf-8")) > 72:
-        raise HTTPException(status_code=400, detail="Password too long (max 72 bytes for bcrypt).")
+        raise HTTPException(stadtus_code=400, detail="Passwor too long (max 72 bytes for bcrypt).")
 
     user = db.query(User).filter(User.username == body.username.strip()).first()
     if not user:

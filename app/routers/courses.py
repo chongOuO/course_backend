@@ -41,7 +41,7 @@ def search_courses(
     teacher: Optional[str] = Query(None, description="教師（可用代碼或姓名關鍵字）"),
     category: Optional[str] = Query(None, description="課程分類（category 欄位）"),
 
-    #  這個參數同時支援「系所代碼」或「系所名稱」
+    # 同時支援「系所代碼」或「系所名稱」
     department: Optional[str] = Query(None, description="系所（可輸入代碼或名稱關鍵字）"),
 
     time_slots: list[str] | None = Query(None, description="多選: 1-1,1-2,3-5..."),
@@ -53,7 +53,7 @@ def search_courses(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
 ):
-    # 是否收藏
+    
     is_fav_expr = exists().where(
         and_(
             Favorite.user_id == user.id,
@@ -61,7 +61,7 @@ def search_courses(
         )
     )
 
-    # times 聚合
+    
     times_sq = (
         db.query(
             CourseTime.course_id.label("cid"),
@@ -98,7 +98,7 @@ def search_courses(
         .outerjoin(times_sq, times_sq.c.cid == Course.id)
     )
 
-    # ===== 篩選 =====
+    # ===== 一般篩選 =====
     if keyword:
         k = f"%{keyword.strip()}%"
         q = q.filter(or_(Course.name_zh.ilike(k), Course.name_en.ilike(k)))
@@ -115,12 +115,11 @@ def search_courses(
     if category:
         q = q.filter(Course.category == category)
 
-    
     if department:
         d = department.strip()
         q = q.filter(or_(
             Course.department_id == d,          # 代碼
-            Department.name.ilike(f"%{d}%")     # 名稱
+            Department.name.ilike(f"%{d}%"),    # 名稱
         ))
 
     if teacher:
@@ -146,7 +145,7 @@ def search_courses(
         ]
         q = q.filter(or_(*slot_filters))
 
-    # 範圍內
+    # 範圍內：只要完全落在 start_section ~ end_section 之間
     if start_section is not None and end_section is not None:
         q = q.filter(
             and_(
@@ -159,13 +158,16 @@ def search_courses(
     elif end_section is not None:
         q = q.filter(CourseTime.end_section <= end_section)
 
+    # 有使用時間條件才去 distinct，避免同一課多個時段重複
     if weekday is not None or start_section is not None or end_section is not None or slots:
-        q = q.distinct(Course.id)
+        # ⚠ 改成 .distinct()，避免 DISTINCT ON 限制，方便排序 is_favorite
+        q = q.distinct()
 
     total = q.count()
 
+    
     rows = (
-        q.order_by(Course.id.asc())
+        q.order_by(is_fav_expr.desc(), Course.id.asc())
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
@@ -182,7 +184,6 @@ def search_courses(
             "required_type": course.required_type,
             "category": course.category,
 
-           
             "department_id": dept_id,
             "department_name": dept_name,
 
@@ -194,12 +195,12 @@ def search_courses(
             "limit_min": course.limit_min,
             "limit_max": course.limit_max,
             "raw_remark": course.raw_remark,
+
             "is_favorite": bool(is_favorite),
             "times": times or [],
         })
 
     return {"page": page, "page_size": page_size, "total": total, "items": items}
-
 @router.get("/public")
 def search_courses_public(
     db: Session = Depends(get_db),
