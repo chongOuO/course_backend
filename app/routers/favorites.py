@@ -12,6 +12,11 @@ from app.schemas.favorite import FavoriteCourseOut
 from app.models.teacher import Teacher
 from app.models.department import Department
 
+from sqlalchemy import and_, func, cast
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.sql import exists, tuple_
+from sqlalchemy.dialects.postgresql import aggregate_order_by
+
 import logging
 logger = logging.getLogger("app.admin")
 
@@ -75,64 +80,89 @@ def add_favorite(course_id: str, db: Session = Depends(get_db), user=Depends(get
 
 
 # 查看收藏
-@router.get("", response_model=list[FavoriteCourseOut])
+@router.get("")
 def list_my_favorites(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
+    # 如果你也要分頁，可以保留
+    page: int = 1,
+    page_size: int = 200,
 ):
-    # 1) 先拿收藏的 course_id 清單
-    fav_rows = db.query(Favorite.course_id).filter(Favorite.user_id == user.id).all()
-    course_ids = [r[0] for r in fav_rows]
-    if not course_ids:
-        return []
+    # times 聚合（跟搜尋一模一樣）
+    times_sq = (
+        db.query(
+            CourseTime.course_id.label("cid"),
+            func.coalesce(
+                func.jsonb_agg(
+                    aggregate_order_by(
+                        func.jsonb_build_object(
+                            "weekday", CourseTime.weekday,
+                            "start_section", CourseTime.start_section,
+                            "end_section", CourseTime.end_section,
+                            "classroom", CourseTime.classroom,
+                        ),
+                        tuple_(CourseTime.weekday, CourseTime.start_section),
+                    )
+                ),
+                cast("[]", JSONB),
+            ).label("times"),
+        )
+        .group_by(CourseTime.course_id)
+        .subquery()
+    )
 
-    # 2) 一次查課程 + 老師 + 系所
-    rows = (
+    # 只列出「我的收藏」：JOIN favorites
+    q = (
         db.query(
             Course,
             Teacher.name.label("teacher_name"),
+            Department.id.label("department_id"),
             Department.name.label("department_name"),
+            times_sq.c.times.label("times"),
         )
+        .join(Favorite, and_(Favorite.course_id == Course.id, Favorite.user_id == user.id))
         .outerjoin(Teacher, Teacher.id == Course.teacher_id)
         .outerjoin(Department, Department.id == Course.department_id)
-        .filter(Course.id.in_(course_ids))
-        .order_by(Course.semester.desc().nullslast(), Course.id.asc())
+        .outerjoin(times_sq, times_sq.c.cid == Course.id)
+    )
+
+    total = q.count()
+
+    rows = (
+        q.order_by(Course.semester.desc().nullslast(), Course.id.asc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
         .all()
     )
 
-    # 3) 再一次把所有課程的時間抓回來（避免在迴圈 query N 次）
-    time_rows = (
-        db.query(CourseTime)
-        .filter(CourseTime.course_id.in_(course_ids))
-        .order_by(CourseTime.weekday.asc(), CourseTime.start_section.asc())
-        .all()
-    )
-    times_map: dict[str, list[CourseTime]] = {}
-    for t in time_rows:
-        times_map.setdefault(t.course_id, []).append(t)
+    items = []
+    for course, teacher_name, dept_id, dept_name, times in rows:
+        items.append({
+            "id": course.id,
+            "name_zh": course.name_zh,
+            "name_en": course.name_en,
+            "semester": course.semester,
+            "grade": course.grade,
+            "required_type": course.required_type,
+            "category": course.category,
 
-    # 4) 組回傳
-    result: list[FavoriteCourseOut] = []
-    for course, teacher_name, department_name in rows:
-        result.append(
-            FavoriteCourseOut(
-                course_id=course.id,
-                semester=course.semester,
-                department_id=course.department_id,
-                department_name=department_name,
-                grade=course.grade,
-                class_group=course.class_group,
-                name_zh=course.name_zh,
-                teacher_name=teacher_name,
-                limit_max=course.limit_max,
-                credit=course.credit,
-                required_type=course.required_type,
-                time_text=format_times(times_map.get(course.id, [])),
-                is_favorite=True,
-            )
-        )
+            "department_id": dept_id,
+            "department_name": dept_name,
 
-    return result
+            "teacher_id": course.teacher_id,
+            "teacher_name": teacher_name,
+            "credit": course.credit,
+            "class_group": course.class_group,
+            "group_code": course.group_code,
+            "limit_min": course.limit_min,
+            "limit_max": course.limit_max,
+            "raw_remark": course.raw_remark,
+
+            "is_favorite": True,     
+            "times": times or [],
+        })
+
+    return {"page": page, "page_size": page_size, "total": total, "items": items}
 
 
 # 移除收藏
