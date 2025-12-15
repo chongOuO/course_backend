@@ -10,6 +10,9 @@ from app.models.course_time import CourseTime
 from app.models.student_course_selection import StudentCourseSelection  
 from app.schemas.student_course_selection_test import AddSelectionTestIn
 
+from fastapi import Query
+
+
 router = APIRouter(prefix="/test", tags=["Test"])
 
 
@@ -113,4 +116,46 @@ def test_add_student_course_selection(
         "semester": row.semester,
         "status": row.status,
         "created_at": row.created_at,
+    }
+
+@router.delete("/student-course-selections/by-course/{course_id}")
+def test_delete_student_course_selection_by_course_id(
+    course_id: str,
+    semester: str | None = Query(None),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    # 1) 課程存在 & 取得 semester
+    course = db.query(Course).filter(Course.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    sem = semester or course.semester
+    if not sem:
+        raise HTTPException(status_code=400, detail="semester is required (and course.semester is empty)")
+
+    # 2) 找到該使用者在該學期的那筆 selection
+    row = (
+        db.query(StudentCourseSelection)
+        .filter(
+            StudentCourseSelection.user_id == user.id,
+            StudentCourseSelection.course_id == course_id,
+            StudentCourseSelection.semester == sem,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Selection not found")
+
+    # 3) 刪除
+    db.delete(row)
+    db.commit()
+
+    return {
+        "detail": "Deleted",
+        "id": row.id,
+        "user_id": user.id,
+        "course_id": course_id,
+        "semester": sem,
+        "status": row.status,
     }
