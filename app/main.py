@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import Base, engine
-from app.routers import auth, courses, favorites, simulate, comments, admin, credits,announcement,profile,admin_course,timetable
+from app.routers import auth, courses, favorites, simulate, comments, admin, credits,announcement,profile,admin_course,timetable,student_course_selection_test
 
 from fastapi.staticfiles import StaticFiles
 
@@ -69,6 +69,7 @@ app.include_router(credits.router)
 app.include_router(announcement.router) 
 app.include_router(admin_course.router)
 app.include_router(timetable.router)
+app.include_router(student_course_selection_test.router)
 
 @app.get("/")
 def root():
