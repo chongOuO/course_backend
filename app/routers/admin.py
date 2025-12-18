@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Optional, Literal
 
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 
@@ -19,11 +19,15 @@ from app.models.course_time import CourseTime
 from app.models.user import User
 from app.models.student_profile import StudentProfile
 
+from app.schemas.admin_user import (
+    AdminUserOut,
+    AdminUserListOut,
+    AdminUserUpdateIn,
+    AdminResetPasswordIn,
+)
 
 from app.utils.hashing import hash_password as get_password_hash
 
-from datetime import datetime
-from typing import Optional
 
 import logging
 logger = logging.getLogger("app.admin")
@@ -196,51 +200,8 @@ def import_courses(
         raise
 
 
-#使用者管理
-Role = Literal["admin", "student"]
 
 
-class AdminUserOut(BaseModel):
-    id: int
-    username: str
-    role: str
-    is_active: bool
-    # profile（可能為 None）
-    student_no: Optional[str] = None
-    full_name: Optional[str] = None
-    email: Optional[str] = None
-    phone: Optional[str] = None
-    avatar_url: Optional[str] = None
-    last_login_at: Optional[datetime] = None
-
-class AdminUserListOut(BaseModel):
-    items: list[AdminUserOut]
-    total: int
-    page: int
-    page_size: int
-
-
-class AdminUserCreateIn(BaseModel):
-    username: str = Field(..., min_length=3, max_length=50)
-    password: str = Field(..., min_length=6, max_length=72)  
-    role: Role = "student"
-    student_no: Optional[str] = None
-    full_name: Optional[str] = None
-    email: Optional[str] = None
-    phone: Optional[str] = None
-
-
-class AdminUserUpdateIn(BaseModel):
-    role: Optional[Role] = None
-    is_active: Optional[bool] = None
-    full_name: Optional[str] = None
-    email: Optional[str] = None
-    phone: Optional[str] = None
-    avatar_url: Optional[str] = None
-
-
-class AdminResetPasswordIn(BaseModel):
-    new_password: str = Field(..., min_length=0, max_length=72)
 
 
 def _to_out(u: User, p: Optional[StudentProfile]) -> AdminUserOut:
@@ -265,18 +226,21 @@ def admin_list_users(
 
     name: Optional[str] = Query(None, description="姓名 full_name"),
     student_no: Optional[str] = Query(None, description="學號 student_no"),
-    department: Optional[str] = Query(None, description="系所 department (name or code)"),
+    department: Optional[str] = Query(None, description="系所 (Department.name)"),
     email: Optional[str] = Query(None, description="Email"),
-
 
     role: Optional[str] = Query(None, description="admin/student"),
     is_active: Optional[bool] = Query(None),
 
-    # 分頁
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ):
-    q = db.query(User).outerjoin(StudentProfile, StudentProfile.user_id == User.id)
+    
+    q = (
+        db.query(User)
+        .outerjoin(StudentProfile, StudentProfile.user_id == User.id)
+        .outerjoin(Department, Department.id == User.department_id)
+    )
 
     if name:
         q = q.filter(StudentProfile.full_name.ilike(f"%{name}%"))
@@ -284,13 +248,12 @@ def admin_list_users(
     if student_no:
         q = q.filter(StudentProfile.student_no.ilike(f"%{student_no}%"))
 
+    #
     if department:
-        q = q.filter(StudentProfile.department.ilike(f"%{department}%"))
+        q = q.filter(Department.name.ilike(f"%{department}%"))
 
     if email:
         q = q.filter(StudentProfile.email.ilike(f"%{email}%"))
-
-   
 
     if role:
         q = q.filter(User.role == role)
@@ -311,8 +274,26 @@ def admin_list_users(
     profs = db.query(StudentProfile).filter(StudentProfile.user_id.in_(user_ids)).all()
     prof_map = {p.user_id: p for p in profs}
 
-    items = [_to_out(u, prof_map.get(u.id)) for u in users]
+   
+    dept_rows = (
+        db.query(User.id, Department.name)
+        .outerjoin(Department, Department.id == User.department_id)
+        .filter(User.id.in_(user_ids))
+        .all()
+    )
+    dept_map = {uid: dept_name for uid, dept_name in dept_rows}
+
+    items = []
+    for u in users:
+        out = _to_out(u, prof_map.get(u.id))
+        dept_name = dept_map.get(u.id)
+
+        
+        out = out.model_copy(update={"department_name": dept_name})
+        items.append(out)
+
     return AdminUserListOut(items=items, total=total, page=page, page_size=page_size)
+
 
 
 
@@ -325,9 +306,20 @@ def admin_get_user(
     u = db.query(User).filter(User.id == user_id).first()
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
-    p = db.query(StudentProfile).filter(StudentProfile.user_id == user_id).first()
-    return _to_out(u, p)
 
+    p = db.query(StudentProfile).filter(StudentProfile.user_id == user_id).first()
+
+    dept_name = None
+    if u.department_id:
+        dept_name = (
+            db.query(Department.name)
+            .filter(Department.id == u.department_id)
+            .scalar()
+        )
+
+    out = _to_out(u, p)
+    out = out.model_copy(update={"department_name": dept_name})
+    return out
 
 
 
@@ -344,27 +336,65 @@ def admin_update_user(
 
     data = body.model_dump(exclude_unset=True)
 
-    if "role" in data and data["role"] is not None:
-        u.role = data["role"]
+    
+    if "department_name" in data and data["department_name"] is not None:
+        dept = (
+            db.query(Department)
+            .filter(Department.name == data["department_name"])  
+            .first()
+        )
+        if not dept:
+            raise HTTPException(status_code=400, detail=f"Department not found: {data['department_name']}")
+        u.department_id = dept.id
 
-    if "is_active" in data and data["is_active"] is not None:
-        u.is_active = data["is_active"]
-
+    
     p = db.query(StudentProfile).filter(StudentProfile.user_id == user_id).first()
     if not p:
-        # 確保 profile 存在
-        p = StudentProfile(user_id=user_id, student_no=u.username)
+        fallback_student_no = data.get("student_no") or getattr(u, "username", None) or str(u.id)
+        p = StudentProfile(user_id=user_id, student_no=fallback_student_no)
         db.add(p)
 
-    for k in ["full_name", "email", "phone", "avatar_url"]:
-        if k in data:
-            setattr(p, k, data[k])
+    
+    if "student_no" in data and data["student_no"] is not None:
+        p.student_no = data["student_no"]
+    if "full_name" in data and data["full_name"] is not None:
+        p.full_name = data["full_name"]
+    if "email" in data and data["email"] is not None:
+        p.email = data["email"]
+    if "phone" in data and data["phone"] is not None:
+        p.phone = data["phone"]
 
+    
+    if "role" in data and data["role"] is not None:
+        u.role = data["role"]
+    if "is_active" in data and data["is_active"] is not None:
+        u.is_active = data["is_active"]
+    if "student_no" in data and data["student_no"] is not None:
+        new_no = data["student_no"].strip()
+
+        #避免重複
+        exists = db.query(User).filter(User.username == new_no, User.id != u.id).first()
+        if exists:
+            raise HTTPException(status_code=409, detail="student_no already used as username")
+
+        #同步更新
+        p.student_no = new_no
+        u.username = new_no
+        
     db.commit()
     db.refresh(u)
     db.refresh(p)
-    return _to_out(u, p)
+    dept_name = None
+    if u.department_id:
+        dept_name = (
+            db.query(Department.name)
+            .filter(Department.id == u.department_id)
+            .scalar()
+        )
 
+    out = _to_out(u, p)
+    out = out.model_copy(update={"department_name": dept_name})
+    return out
 
 @router.patch("/users/{user_id}/password")
 def admin_reset_password(

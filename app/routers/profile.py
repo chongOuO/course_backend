@@ -27,10 +27,6 @@ def _ensure_student_profile(db: Session, user_id: int, username: str) -> Student
     prof = db.query(StudentProfile).filter(StudentProfile.user_id == user_id).first()
     if prof:
         return prof
-
-    # 這裡需要你決定 student_no 從哪來：
-    # - 若你 users 裡有 student_no，就用那個
-    # - 沒有的話：暫用 username 當學號
     prof = StudentProfile(user_id=user_id, student_no=username)
     db.add(prof)
     db.commit()
