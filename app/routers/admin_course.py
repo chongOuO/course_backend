@@ -203,6 +203,8 @@ def admin_create_course(
     return AdminCourseOut.model_validate(c)
 
 
+from sqlalchemy.exc import IntegrityError
+
 @router.put("/{course_id}", response_model=AdminCourseOut)
 def admin_update_course(
     course_id: str,
@@ -216,6 +218,11 @@ def admin_update_course(
 
     data = body.model_dump(exclude_unset=True)
 
+    #  把時間相關欄位先抽出來，避免 setattr 到 Course 上報錯
+    times_in = data.pop("times", None)         # 可能不存在
+    time_slots_in = data.pop("time_slots", None)
+    classroom_in = data.pop("classroom", None)
+
     # FK 檢查
     if "department_id" in data and data["department_id"] is not None:
         if not db.query(Department.id).filter(Department.id == data["department_id"]).first():
@@ -224,12 +231,49 @@ def admin_update_course(
         if not db.query(Teacher.id).filter(Teacher.id == data["teacher_id"]).first():
             raise HTTPException(status_code=400, detail="teacher_id not found")
 
+    # 更新 Course 基本欄位
     for k, v in data.items():
         setattr(c, k, v)
 
-    db.commit()
+    #  是否要更新時間：只要 times / time_slots / classroom 有出現，就視為要更新課表
+    wants_update_time = (times_in is not None) or (time_slots_in is not None) or (classroom_in is not None)
+
+    if wants_update_time:
+        
+        db.query(CourseTime).filter(CourseTime.course_id == course_id).delete(synchronize_session=False)
+
+        
+        if time_slots_in is not None:
+            slots = parse_time_slots(time_slots_in or [])
+            ranges = compress_slots_to_ranges(slots)
+            for w, start, end in ranges:
+                db.add(CourseTime(
+                    course_id=course_id,
+                    weekday=w,
+                    start_section=start,
+                    end_section=end,
+                    classroom=classroom_in,  
+                ))
+        elif times_in is not None:
+            for t in (times_in or []):
+                db.add(CourseTime(
+                    course_id=course_id,
+                    weekday=t["weekday"] if isinstance(t, dict) else t.weekday,
+                    start_section=t["start_section"] if isinstance(t, dict) else t.start_section,
+                    end_section=t["end_section"] if isinstance(t, dict) else t.end_section,
+                    classroom=(t.get("classroom") if isinstance(t, dict) else t.classroom),
+                ))
+       
+
+    try:
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e.orig))
+
     db.refresh(c)
     return AdminCourseOut.model_validate(c)
+
 
 
 @router.delete("/{course_id}")
