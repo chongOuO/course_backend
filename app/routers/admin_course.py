@@ -7,7 +7,7 @@ from sqlalchemy import or_, and_
 
 from app.database import get_db
 from app.utils.auth import get_current_user
-
+from sqlalchemy.exc import IntegrityError
 from app.models.course import Course
 from app.models.course_time import CourseTime
 from app.models.teacher import Teacher
@@ -25,6 +25,7 @@ import logging
 logger = logging.getLogger("app.admin")
 
 
+
 router = APIRouter(prefix="/admin/courses", tags=["Admin - Courses"])
 
 
@@ -34,99 +35,6 @@ def require_admin(user=Depends(get_current_user)):
     return user
 
 
-@router.get("", response_model=AdminCourseListOut)
-def admin_search_courses(
-    db: Session = Depends(get_db),
-    admin=Depends(require_admin),
-
-    #篩選
-    course_id: Optional[str] = Query(None, description="科目代號/編號"),
-    semester: Optional[str] = Query(None, description="學期 e.g. 1141"),
-    grade: Optional[int] = Query(None, description="年級"),
-    department_id: Optional[str] = Query(None, description="系所代碼"),
-    teacher_id: Optional[str] = Query(None, description="教師代碼"),
-    keyword: Optional[str] = Query(None, description="課程名稱關鍵字(中英)"),
-    category: Optional[str] = Query(None, description="課別代碼"),
-    required_type: Optional[str] = Query(None, description="課別名稱"),
-    credit: Optional[int] = Query(None, description="學分數"),
-    limit_max: Optional[int] = Query(None, description="上限人數"),
-
-    #時間複選
-    time_slots: list[str] | None = Query(None, description="多選: 1-1,1-2..."),
-
-    
-    weekday: Optional[int] = Query(None, ge=1, le=7),
-    section: Optional[int] = Query(None, description="某一節(例如 3)，會找 start<=3<=end"),
-
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-):
-    q = db.query(Course)
-
-    #基本欄位過濾
-    if course_id:
-        q = q.filter(Course.id.ilike(f"%{course_id}%"))
-    if semester:
-        q = q.filter(Course.semester == semester)
-    if grade is not None:
-        q = q.filter(Course.grade == grade)
-    if department_id:
-        q = q.filter(Course.department_id == department_id)
-    if teacher_id:
-        q = q.filter(Course.teacher_id == teacher_id)
-    if keyword:
-        like = f"%{keyword}%"
-        q = q.filter(or_(Course.name_zh.ilike(like), Course.name_en.ilike(like)))
-    if category:
-        q = q.filter(Course.category == category)
-    if required_type:
-        q = q.filter(Course.required_type == required_type)
-    if credit is not None:
-        q = q.filter(Course.credit == credit)
-    if limit_max is not None:
-        q = q.filter(Course.limit_max == limit_max)
-
-    #時間條件
-    slots = parse_time_slots(time_slots)
-    need_time_join = bool(slots) or (weekday is not None) or (section is not None)
-
-    if need_time_join:
-        q = q.join(CourseTime, CourseTime.course_id == Course.id)
-
-        # 複選time_slots-符合任一格
-        if slots:
-            slot_filters = [
-                and_(
-                    CourseTime.weekday == w,
-                    CourseTime.start_section <= sec,
-                    CourseTime.end_section >= sec,
-                )
-                for (w, sec) in slots
-            ]
-            q = q.filter(or_(*slot_filters))
-
-        # 舊參數 weekday / section
-        if weekday is not None:
-            q = q.filter(CourseTime.weekday == weekday)
-        if section is not None:
-            q = q.filter(and_(CourseTime.start_section <= section, CourseTime.end_section >= section))
-
-        q = q.distinct()
-
-    total = q.count()
-    items = (
-        q.order_by(Course.id.asc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-        .all()
-    )
-
-    return AdminCourseListOut(
-        items=[AdminCourseOut.model_validate(x) for x in items],
-        total=total,
-        page=page,
-        page_size=page_size,
-    )
 
 
 @router.get("/{course_id}", response_model=AdminCourseOut)
@@ -145,13 +53,30 @@ def admin_create_course(
 ):
     if db.query(Course.id).filter(Course.id == body.id).first():
         raise HTTPException(status_code=400, detail="Course id already exists")
+    department_id = body.department_id
+    teacher_id = body.teacher_id
+    if getattr(body, "department_name", None):
+        rows = db.query(Department).filter(Department.name == body.department_name).all()  # ← 改成你的欄位
+        if len(rows) == 0:
+            raise HTTPException(status_code=400, detail="department_name 找不到對應系所")
+        if len(rows) > 1:
+            raise HTTPException(status_code=400, detail="department_name 重複，請改用 department_id")
+        department_id = rows[0].id
+
+    if getattr(body, "teacher_name", None):
+        rows = db.query(Teacher).filter(Teacher.name == body.teacher_name).all()  # ← 改成你的欄位
+        if len(rows) == 0:
+            raise HTTPException(status_code=400, detail="teacher_name 找不到對應教師")
+        if len(rows) > 1:
+            raise HTTPException(status_code=400, detail="teacher_name 重複，請改用 teacher_id")
+        teacher_id = rows[0].id
 
     # FK 檢查
-    if body.department_id:
-        if not db.query(Department.id).filter(Department.id == body.department_id).first():
+    if department_id:
+        if not db.query(Department.id).filter(Department.id == department_id).first():
             raise HTTPException(status_code=400, detail="department_id not found")
-    if body.teacher_id:
-        if not db.query(Teacher.id).filter(Teacher.id == body.teacher_id).first():
+    if teacher_id:
+        if not db.query(Teacher.id).filter(Teacher.id == teacher_id).first():
             raise HTTPException(status_code=400, detail="teacher_id not found")
 
     c = Course(
@@ -159,8 +84,9 @@ def admin_create_course(
         name_zh=body.name_zh,
         name_en=body.name_en,
         semester=body.semester,
-        department_id=body.department_id,
-        teacher_id=body.teacher_id,
+        department_id=department_id,
+        teacher_id=teacher_id,
+        
         grade=body.grade,
         class_group=body.class_group,
         group_code=body.group_code,
@@ -203,7 +129,7 @@ def admin_create_course(
     return AdminCourseOut.model_validate(c)
 
 
-from sqlalchemy.exc import IntegrityError
+
 
 @router.put("/{course_id}", response_model=AdminCourseOut)
 def admin_update_course(
@@ -218,12 +144,30 @@ def admin_update_course(
 
     data = body.model_dump(exclude_unset=True)
 
-    #  把時間相關欄位先抽出來，避免 setattr 到 Course 上報錯
-    times_in = data.pop("times", None)         # 可能不存在
+   
+    times_in = data.pop("times", None)         
     time_slots_in = data.pop("time_slots", None)
     classroom_in = data.pop("classroom", None)
+    
+    if "teacher_name" in data and data["teacher_name"] is not None:
+        tname = data.pop("teacher_name")
+        row = db.query(Teacher).filter(Teacher.name == tname).all()  
+        if len(row) == 0:
+            raise HTTPException(status_code=400, detail="teacher_name 找不到對應教師")
+        if len(row) > 1:
+            raise HTTPException(status_code=400, detail="teacher_name 重複，請改用 teacher_id")
+        data["teacher_id"] = row[0].id   
 
-    # FK 檢查
+    
+    if "department_name" in data and data["department_name"] is not None:
+        dname = data.pop("department_name")
+        row = db.query(Department).filter(Department.name == dname).all()  
+        if len(row) == 0:
+            raise HTTPException(status_code=400, detail="department_name 找不到對應系所")
+        if len(row) > 1:
+            raise HTTPException(status_code=400, detail="department_name 重複，請改用 department_id")
+        data["department_id"] = row[0].id
+   
     if "department_id" in data and data["department_id"] is not None:
         if not db.query(Department.id).filter(Department.id == data["department_id"]).first():
             raise HTTPException(status_code=400, detail="department_id not found")

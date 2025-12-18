@@ -31,11 +31,15 @@ class AdminCourseBase(BaseModel):
 
 
 class AdminCourseCreate(AdminCourseBase):
-    
+    department_name: Optional[str] = None
+    teacher_name: Optional[str] = None    
+
     times: List[CourseTimeIn] = Field(default_factory=list)
 
     time_slots: List[str] = Field(default_factory=list, description="例如 ['1-1','1-2','3-5']")
     classroom: Optional[str] = Field(default=None, description="若使用 time_slots，可填統一教室")
+
+
 
     @model_validator(mode="after")
     def _validate_time_create(self):
@@ -68,6 +72,8 @@ class AdminCourseUpdate(BaseModel):
     semester: Optional[str] = None
     department_id: Optional[str] = None
     teacher_id: Optional[str] = None
+    department_name: Optional[str] = None
+    teacher_name: Optional[str] = None
     grade: Optional[int] = None
     class_group: Optional[str] = None
     group_code: Optional[str] = None
