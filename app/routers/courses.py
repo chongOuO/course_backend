@@ -22,6 +22,8 @@ from sqlalchemy import exists
 from sqlalchemy import func, cast,tuple_
 from sqlalchemy.dialects.postgresql import JSONB, aggregate_order_by
 
+from collections import OrderedDict
+
 
 router = APIRouter(prefix="/courses", tags=["Courses"])
 
@@ -160,7 +162,7 @@ def search_courses(
 
     # 有使用時間條件才去 distinct，避免同一課多個時段重複
     if weekday is not None or start_section is not None or end_section is not None or slots:
-        # ⚠ 改成 .distinct()，避免 DISTINCT ON 限制，方便排序 is_favorite
+        
         q = q.distinct()
 
     total = q.count()
@@ -364,8 +366,8 @@ def search_courses_public(
 @router.get("/export")
 def export_courses_excel(
     db: Session = Depends(get_db),
-
     
+
     keyword: Optional[str] = Query(None, description="課程名稱關鍵字（中/英）"),
     semester: Optional[str] = Query(None, description="學期，例如 1141"),
     required_type: Optional[str] = Query(None, description="課別，例如 專業必修(系所)"),
@@ -394,7 +396,7 @@ def export_courses_excel(
         .outerjoin(Department, Department.id == Course.department_id)
     )
 
-    # ===== 一般篩選（同搜尋課程）=====
+    # ===== 一般篩選=====
     if keyword:
         k = f"%{keyword.strip()}%"
         q = q.filter(or_(Course.name_zh.ilike(k), Course.name_en.ilike(k)))
@@ -411,23 +413,15 @@ def export_courses_excel(
     if category:
         q = q.filter(Course.category == category)
 
-    # department：代碼 or 名稱關鍵字
     if department:
         d = department.strip()
-        q = q.filter(or_(
-            Course.department_id == d,
-            Department.name.ilike(f"%{d}%")
-        ))
+        q = q.filter(or_(Course.department_id == d, Department.name.ilike(f"%{d}%")))
 
-    # teacher：代碼 or 姓名關鍵字
     if teacher:
         t = teacher.strip()
-        q = q.filter(or_(
-            Course.teacher_id == t,
-            Teacher.name.ilike(f"%{t}%")
-        ))
+        q = q.filter(or_(Course.teacher_id == t, Teacher.name.ilike(f"%{t}%")))
 
-    # 時間篩選（同搜尋課程
+    # ===== 時間篩選=====
     slots = parse_time_slots(time_slots)
 
     if weekday is not None or start_section is not None or end_section is not None or slots:
@@ -447,14 +441,8 @@ def export_courses_excel(
         ]
         q = q.filter(or_(*slot_filters))
 
-    # 範圍內
     if start_section is not None and end_section is not None:
-        q = q.filter(
-            and_(
-                CourseTime.start_section >= start_section,
-                CourseTime.end_section <= end_section,
-            )
-        )
+        q = q.filter(and_(CourseTime.start_section >= start_section, CourseTime.end_section <= end_section))
     elif start_section is not None:
         q = q.filter(CourseTime.start_section >= start_section)
     elif end_section is not None:
@@ -465,10 +453,14 @@ def export_courses_excel(
 
     q = q.order_by(Course.id.asc())
     results = q.all()
-
+    if not results:
+        raise HTTPException(
+            status_code=404,
+            detail="No courses found for the given filters."
+        )
     # ===== times map（避免 N+1）=====
     course_ids = [c.id for (c, _tname, _dname) in results]
-    times_map = {}
+    times_map: dict[str, list[CourseTime]] = {}
     if course_ids:
         times = (
             db.query(CourseTime)
@@ -479,35 +471,63 @@ def export_courses_excel(
         for t in times:
             times_map.setdefault(t.course_id, []).append(t)
 
-    def fmt_time_list(course_id: str) -> str:
+    def pick_first_time(course_id: str):
+        """export 對齊 import：只輸出一筆 上課星期/上課節次/上課地點（若同課多時段，取第一筆）"""
         arr = times_map.get(course_id, [])
-        parts = []
-        for t in arr:
-            if t.start_section == t.end_section:
-                parts.append(f"{t.weekday}-{t.start_section}")
-            else:
-                parts.append(f"{t.weekday}-{t.start_section}~{t.end_section}")
-        return ", ".join(parts)
+        if not arr:
+            return None, None, None
+        t = arr[0]
+        w = t.weekday
+        # 上課節次：單節就輸出 "3"，多節就輸出 "3-5"
+        if t.start_section == t.end_section:
+            sec = str(t.start_section)
+        else:
+            sec = f"{t.start_section}-{t.end_section}"
+        return w, sec, t.classroom
 
+    # ===== 匯出欄位：對齊 import 讀取的 header =====
+    # 系所代碼、主開課教師代碼(舊碼)/授課教師代碼(舊碼)、主開課教師姓名/授課教師姓名、
+    # 科目代碼(新碼全碼)、科目中文名稱、科目英文名稱、年級、上課班組、科目組別、學分數、課別名稱、課別代碼、
+    # 上課人數、課程中文摘要、課程英文摘要、課表備註、學期、上課星期、上課節次、上課地點
     rows_for_excel = []
     for course, teacher_name, dept_name in results:
-        rows_for_excel.append({
-            "科目代號": course.id,
-            "課程名稱": course.name_zh,
-            "學期": course.semester,
-            "年級": course.grade,
-            "系所": dept_name or course.department_id,
-            "教師": teacher_name or course.teacher_id,
-            "學分數": course.credit,
-            "課別": course.required_type,
-            "類別代碼": course.category,
-            "上限人數": course.limit_max,
-            "時間": fmt_time_list(course.id),
-            "備註": course.raw_remark,
-        })
+        w, sec, room = pick_first_time(course.id)
+
+        rows_for_excel.append(OrderedDict([
+            ("系所代碼", course.department_id),
+            # 如果你之後想補系所名稱，可加欄位，但 import 不會用到：
+            # ("系所名稱", dept_name or ""),
+            ("主開課教師代碼(舊碼)", course.teacher_id),
+            ("主開課教師姓名", teacher_name or ""),
+            # 兼容你的 import（它會嘗試主開課/授課二選一）
+            ("授課教師代碼(舊碼)", course.teacher_id),
+            ("授課教師姓名", teacher_name or ""),
+
+            ("科目代碼(新碼全碼)", course.id),
+            ("科目中文名稱", course.name_zh or ""),
+            ("科目英文名稱", course.name_en or ""),
+
+            ("年級", course.grade),
+            ("上課班組", course.class_group or ""),
+            ("科目組別", course.group_code or ""),
+
+            ("學分數", course.credit),
+            ("課別名稱", course.required_type or ""),
+            ("課別代碼", course.category or ""),
+            ("上課人數", course.limit_max),
+
+            ("課程中文摘要", course.chinese_summary or ""),
+            ("課程英文摘要", course.english_summary or ""),
+            ("課表備註", course.raw_remark or ""),
+            ("學期", course.semester or ""),
+
+            ("上課星期", w),
+            ("上課節次", sec),
+            ("上課地點", room or ""),
+        ]))
 
     xlsx_bytes = courses_to_xlsx_bytes(rows_for_excel, sheet_name="Courses")
-    filename = make_filename("courses")
+    filename = make_filename("courses")  
 
     return StreamingResponse(
         iter([xlsx_bytes]),
