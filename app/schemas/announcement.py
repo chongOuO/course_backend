@@ -40,6 +40,7 @@ class AnnouncementSummary(BaseModel):
 
     id: int
     title: str
+    content: str
     category: AnnouncementCategory
     created_at: datetime
     is_pinned: bool
@@ -61,8 +62,15 @@ class AnnouncementDetail(BaseModel):
     author_id: Optional[int]
 
 
+
 class AnnouncementListOut(BaseModel):
     items: list[AnnouncementSummary]
     total: int
     page: int
     page_size: int
+
+
+
+
+
+    

@@ -28,6 +28,9 @@ def require_admin(user=Depends(get_current_user)):
     return user
 
 
+from fastapi import Depends, Query
+from sqlalchemy.orm import Session, selectinload
+
 @router.get("", response_model=AnnouncementListOut)
 def list_announcements(
     db: Session = Depends(get_db),
@@ -37,12 +40,7 @@ def list_announcements(
     keyword: str | None = Query(None),
     include_inactive: bool = Query(False, description="管理者可看下架公告"),
 ):
-    """
-     公告列表（學生可用）
-    - 預設只顯示 is_active = true
-    office course_change department activity
-    """
-    query = db.query(Announcement)
+    query = db.query(Announcement)  
 
     if not include_inactive:
         query = query.filter(Announcement.is_active.is_(True))
@@ -66,6 +64,7 @@ def list_announcements(
         AnnouncementSummary(
             id=r.id,
             title=r.title,
+            content=r.content,  
             category=r.category,
             created_at=r.created_at,
             is_pinned=r.is_pinned,
