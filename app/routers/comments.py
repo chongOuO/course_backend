@@ -25,6 +25,8 @@ from typing import Optional
 from fastapi import Query
 from sqlalchemy import func, or_, and_, tuple_
 
+from app.models.student_profile import StudentProfile
+from app.models.user import User
 
 import logging
 logger = logging.getLogger("app.admin")
@@ -177,9 +179,14 @@ def search_courses_with_comments(
             Comment,
             func.coalesce(like_cnt_sq.c.like_count, 0).label("like_count"),
             (liked_sq.c.cid.isnot(None)).label("liked_by_me"),
+            Department.name.label("author_department_name"),
         )
         .outerjoin(like_cnt_sq, like_cnt_sq.c.cid == Comment.id)
         .outerjoin(liked_sq, liked_sq.c.cid == Comment.id)
+
+        .outerjoin(User, User.id == Comment.user_id)
+        .outerjoin(StudentProfile, StudentProfile.user_id == User.id)
+        .outerjoin(Department, Department.id == User.department_id)
         .filter(Comment.course_id.in_(course_ids))
         .order_by(Comment.course_id.asc(), Comment.created_at.desc())
         .all()
@@ -187,7 +194,7 @@ def search_courses_with_comments(
 
     # 每門課只取 comment_limit 則
     comments_map: dict[str, list] = {cid: [] for cid in course_ids}
-    for c, like_count, liked_by_me in comment_rows:
+    for c, like_count, liked_by_me,author_department_name in comment_rows:
         bucket = comments_map.get(c.course_id)
         if bucket is None:
             continue
@@ -201,6 +208,7 @@ def search_courses_with_comments(
             "created_at": c.created_at,
             "like_count": int(like_count),
             "liked_by_me": bool(liked_by_me),
+            "author_department_name": author_department_name,
         })
 
     # 每門課留言總數
