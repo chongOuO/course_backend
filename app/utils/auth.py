@@ -33,3 +33,9 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 
     except JWTError:
         raise HTTPException(status_code=403, detail="Invalid authentication token")
+
+#管理者驗證
+def require_admin(user=Depends(get_current_user)):
+    if getattr(user, "role", None) != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user

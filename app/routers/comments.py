@@ -6,7 +6,7 @@ from app.database import get_db
 from app.models.comment import Comment
 from app.models.course import Course
 from app.schemas.comment import CommentCreate, CommentOut
-from app.utils.auth import get_current_user
+from app.utils.auth import get_current_user,require_admin
 
 from sqlalchemy import func
 from app.models.comment_like import CommentLike
@@ -342,3 +342,15 @@ def delete_comment(comment_id: int, db: Session = Depends(get_db), user=Depends 
     db.commit()
     return {"detail": "Comment deleted"}
 
+@router.delete("/admin/{comment_id}")
+def admin_delete_comment(
+    comment_id:int,
+    db: Session = Depends(get_db),
+    admin=Depends(require_admin),
+):
+    comment = db.query(Comment).filter(Comment.id == comment_id).first()
+    if not comment:
+        raise  HTTPException(status_code=404,detail="Comment not Found")
+    db.delete(comment)
+    db.commit()
+    return {"detail":"Comment deleted by admin"}

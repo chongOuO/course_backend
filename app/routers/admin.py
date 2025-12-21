@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_
 
 from app.database import get_db
-from app.utils.auth import get_current_user
+from app.utils.auth import get_current_user,require_admin
 
 from app.models.course import Course
 from app.models.teacher import Teacher
@@ -36,11 +36,7 @@ logger = logging.getLogger("app.admin")
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
 
-#管理者驗證
-def require_admin(user=Depends(get_current_user)):
-    if getattr(user, "role", None) != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
-    return user
+
 
 
 #excel匯入功能

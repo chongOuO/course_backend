@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_, and_
 
 from app.database import get_db
-from app.utils.auth import get_current_user
+from app.utils.auth import get_current_user,require_admin
 from sqlalchemy.exc import IntegrityError
 from app.models.course import Course
 from app.models.course_time import CourseTime
@@ -29,10 +29,7 @@ logger = logging.getLogger("app.admin")
 router = APIRouter(prefix="/admin/courses", tags=["Admin - Courses"])
 
 
-def require_admin(user=Depends(get_current_user)):
-    if getattr(user, "role", None) != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
-    return user
+
 
 
 
