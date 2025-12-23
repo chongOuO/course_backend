@@ -13,7 +13,7 @@ from app.schemas.announcement import (
     AnnouncementCategory,
 )
 
-from app.utils.auth import get_current_user
+from app.utils.auth import require_admin
 
 import logging
 logger = logging.getLogger("app.admin")
@@ -21,15 +21,11 @@ logger = logging.getLogger("app.admin")
 router = APIRouter(prefix="/announcements", tags=["Announcements"])
 
 
-def require_admin(user=Depends(get_current_user)):
-    role = getattr(user, "role", None)
-    if role != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
-    return user
+
 
 
 from fastapi import Depends, Query
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
 @router.get("", response_model=AnnouncementListOut)
 def list_announcements(

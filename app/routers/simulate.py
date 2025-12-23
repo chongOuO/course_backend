@@ -22,12 +22,12 @@ def bulk_add_simulated(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    # 0) 去重
+    #  去重
     course_ids = list(dict.fromkeys([c.strip() for c in body.course_ids if c and c.strip()]))
     if not course_ids:
         raise HTTPException(400, "course_ids is empty")
 
-    # 1) 取出目前預選
+    # 取出目前預選
     existing = db.query(SimulatedSelection).filter(SimulatedSelection.user_id == user.id).all()
     existing_ids = [s.course_id for s in existing]
 
@@ -35,24 +35,24 @@ def bulk_add_simulated(
     if body.replace:
         existing_ids = []
 
-    # 2) 一次把涉及到的課都查出來（含 times）
+    # 一次把涉及到的課都查出來（含 times）
     all_need_ids = list(dict.fromkeys(existing_ids + course_ids))
     courses = db.query(Course).filter(Course.id.in_(all_need_ids)).all()
     course_map = {c.id: c for c in courses}
 
-    # 3) 檢查課程是否存在
+    # 檢查課程是否存在
     not_found = [cid for cid in course_ids if cid not in course_map]
     if not_found:
         raise HTTPException(404, {"message": "Course not found", "course_ids": not_found})
 
-    # 4) 整理「目前預選」的時間（用來跟新加的比）
+    # 整理「目前預選」的時間（用來跟新加的比）
     existing_times = []
     for cid in existing_ids:
         c = course_map.get(cid)
         if c:
             existing_times.extend(c.times)
 
-    # 5) 新增時：也要檢查新加的彼此衝堂，所以用 running_times 累加
+    #新增也要檢查新加的彼此衝堂，所以用 running_times 累加
     running_times = list(existing_times)
     to_insert = []
 
@@ -70,7 +70,7 @@ def bulk_add_simulated(
         to_insert.append(SimulatedSelection(user_id=user.id, course_id=cid))
         running_times.extend(new_times)
 
-    # 6) 寫入 DB（只 commit 一次）
+    # 寫入 DB（只 commit 一次）
     if body.replace:
         db.query(SimulatedSelection).filter(SimulatedSelection.user_id == user.id).delete(synchronize_session=False)
 

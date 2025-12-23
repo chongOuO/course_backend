@@ -1,4 +1,4 @@
-# app/models/comment.py
+
 from sqlalchemy import Column, Integer, String, Text, ForeignKey, TIMESTAMP
 from datetime import datetime
 from app.database import Base

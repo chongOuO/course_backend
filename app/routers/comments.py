@@ -74,7 +74,7 @@ def search_courses_with_comments(
 
     comment_limit: int = Query(5, ge=1, le=50, description="每門課最多回傳幾則最新留言"),
 ):
-    # ===== 先查課程=====
+    #先查課程
     q = (
         db.query(
             Course,
@@ -110,7 +110,7 @@ def search_courses_with_comments(
         t = teacher.strip()
         q = q.filter(or_(Course.teacher_id == t, Teacher.name.ilike(f"%{t}%")))
 
-    # ===== 時間篩選（需要 join CourseTime 才能 filter）=====
+    # 時間篩選（需要 join CourseTime 才能 filter)
     slots = parse_time_slots(time_slots)  # 回傳 [(weekday, sec), ...]
     if weekday is not None or start_section is not None or end_section is not None or slots:
         q = q.join(CourseTime, CourseTime.course_id == Course.id)
@@ -148,13 +148,13 @@ def search_courses_with_comments(
         .all()
     )
 
-    # 沒有課就直接回
+    # 沒有課就直接回傳
     if not course_rows:
         return {"page": page, "page_size": page_size, "total": total, "items": []}
 
     course_ids = [course.id for course, *_ in course_rows]
 
-    # =====  一次查回這些課程的留言=====
+    # 一次回傳這些課程的留言
     like_cnt_sq = (
         db.query(CommentLike.comment_id.label("cid"), func.count().label("like_count"))
         .group_by(CommentLike.comment_id)
@@ -218,7 +218,7 @@ def search_courses_with_comments(
     )
     comment_count_map = {cid: int(cc) for cid, cc in cnt_rows}
 
-    # ===== 3) 組裝回傳 =====
+
     items = []
     for course, teacher_name, dept_id, dept_name in course_rows:
         items.append({
@@ -292,7 +292,7 @@ def list_comments(course_id: str, db: Session = Depends(get_db), user=Depends(ge
 
 @router.post("/{course_id}/like")
 def toggle_course_like(course_id: str, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    # course 存在性
+    
     if not db.query(Course.id).filter(Course.id == course_id).first():
         raise HTTPException(status_code=404, detail="Course not found")
 

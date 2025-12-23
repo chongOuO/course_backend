@@ -11,7 +11,7 @@ class PasswordResetToken(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
 
-    # 存 hash，不要存明碼 token
+    # 存 hash
     token_hash = Column(String(128), nullable=False)
 
     expires_at = Column(DateTime, nullable=False)

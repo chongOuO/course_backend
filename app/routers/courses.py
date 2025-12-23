@@ -100,7 +100,7 @@ def search_courses(
         .outerjoin(times_sq, times_sq.c.cid == Course.id)
     )
 
-    # ===== 一般篩選 =====
+    # 一般篩選
     if keyword:
         k = f"%{keyword.strip()}%"
         q = q.filter(or_(Course.name_zh.ilike(k), Course.name_en.ilike(k)))
@@ -128,7 +128,7 @@ def search_courses(
         t = teacher.strip()
         q = q.filter(or_(Course.teacher_id == t, Teacher.name.ilike(f"%{t}%")))
 
-    # ===== 時間篩選（需要 join CourseTime 才能 filter）=====
+    #時間篩選（需要 join CourseTime 才能 filter）
     slots = parse_time_slots(time_slots)
     if weekday is not None or start_section is not None or end_section is not None or slots:
         q = q.join(CourseTime, CourseTime.course_id == Course.id)
@@ -147,7 +147,7 @@ def search_courses(
         ]
         q = q.filter(or_(*slot_filters))
 
-    # 範圍內：只要完全落在 start_section ~ end_section 之間
+    # 只要完全落在 start_section ~ end_section 之間
     if start_section is not None and end_section is not None:
         q = q.filter(
             and_(
@@ -262,7 +262,7 @@ def search_courses_public(
         .outerjoin(times_sq, times_sq.c.cid == Course.id)
     )
 
-    # ===== 篩選 =====
+    # 篩選
     if keyword:
         k = f"%{keyword.strip()}%"
         q = q.filter(or_(Course.name_zh.ilike(k), Course.name_en.ilike(k)))
@@ -291,7 +291,7 @@ def search_courses_public(
         t = teacher.strip()
         q = q.filter(or_(Course.teacher_id == t, Teacher.name.ilike(f"%{t}%")))
 
-    # ===== 時間篩選（需要 join CourseTime 才能 filter）=====
+    # 時間篩選（需要 join CourseTime 才能 filter
     slots = parse_time_slots(time_slots)
     if weekday is not None or start_section is not None or end_section is not None or slots:
         q = q.join(CourseTime, CourseTime.course_id == Course.id)
@@ -396,7 +396,7 @@ def export_courses_excel(
         .outerjoin(Department, Department.id == Course.department_id)
     )
 
-    # ===== 一般篩選=====
+    # 一般篩選
     if keyword:
         k = f"%{keyword.strip()}%"
         q = q.filter(or_(Course.name_zh.ilike(k), Course.name_en.ilike(k)))
@@ -421,7 +421,7 @@ def export_courses_excel(
         t = teacher.strip()
         q = q.filter(or_(Course.teacher_id == t, Teacher.name.ilike(f"%{t}%")))
 
-    # ===== 時間篩選=====
+    # 時間篩選
     slots = parse_time_slots(time_slots)
 
     if weekday is not None or start_section is not None or end_section is not None or slots:
@@ -458,7 +458,7 @@ def export_courses_excel(
             status_code=404,
             detail="No courses found for the given filters."
         )
-    # ===== times map（避免 N+1）=====
+    #times map（避免 N+1)
     course_ids = [c.id for (c, _tname, _dname) in results]
     times_map: dict[str, list[CourseTime]] = {}
     if course_ids:
@@ -495,11 +495,8 @@ def export_courses_excel(
 
         rows_for_excel.append(OrderedDict([
             ("系所代碼", course.department_id),
-            # 如果你之後想補系所名稱，可加欄位，但 import 不會用到：
-            # ("系所名稱", dept_name or ""),
             ("主開課教師代碼(舊碼)", course.teacher_id),
             ("主開課教師姓名", teacher_name or ""),
-            # 兼容你的 import（它會嘗試主開課/授課二選一）
             ("授課教師代碼(舊碼)", course.teacher_id),
             ("授課教師姓名", teacher_name or ""),
 

@@ -2,7 +2,7 @@
 from pydantic import BaseModel
 
 class FavoriteCourseOut(BaseModel):
-    # 你表格需要的欄位
+   
     course_id: str          # 科目代號(編號)
     semester: str | None    # 學期
     department_id: str | None  # 系所(代碼)
@@ -16,5 +16,5 @@ class FavoriteCourseOut(BaseModel):
     required_type: str | None # 課別
     time_text: str | None   # 節次(格式化後)
 
-    # 收藏欄位（前端顯示星星用）
+    # 收藏欄位
     is_favorite: bool = True

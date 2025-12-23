@@ -53,7 +53,7 @@ def admin_create_course(
     department_id = body.department_id
     teacher_id = body.teacher_id
     if getattr(body, "department_name", None):
-        rows = db.query(Department).filter(Department.name == body.department_name).all()  # ← 改成你的欄位
+        rows = db.query(Department).filter(Department.name == body.department_name).all() 
         if len(rows) == 0:
             raise HTTPException(status_code=400, detail="department_name 找不到對應系所")
         if len(rows) > 1:
@@ -61,7 +61,7 @@ def admin_create_course(
         department_id = rows[0].id
 
     if getattr(body, "teacher_name", None):
-        rows = db.query(Teacher).filter(Teacher.name == body.teacher_name).all()  # ← 改成你的欄位
+        rows = db.query(Teacher).filter(Teacher.name == body.teacher_name).all()  
         if len(rows) == 0:
             raise HTTPException(status_code=400, detail="teacher_name 找不到對應教師")
         if len(rows) > 1:
@@ -111,7 +111,6 @@ def admin_create_course(
                 classroom=body.classroom,
             ))
     else:
-        # 沿用原本的 times
         for t in body.times:
             db.add(CourseTime(
                 course_id=body.id,
@@ -176,7 +175,7 @@ def admin_update_course(
     for k, v in data.items():
         setattr(c, k, v)
 
-    #  是否要更新時間：只要 times / time_slots / classroom 有出現，就視為要更新課表
+    #  是否要更新時間
     wants_update_time = (times_in is not None) or (time_slots_in is not None) or (classroom_in is not None)
 
     if wants_update_time:

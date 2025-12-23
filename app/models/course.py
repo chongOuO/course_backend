@@ -31,5 +31,5 @@ class Course(Base):
 
     semester = Column(String(10))
 
-    # relationship
+    
     times = relationship("CourseTime", back_populates="course")

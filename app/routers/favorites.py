@@ -1,4 +1,4 @@
-# app/routers/favorites.py
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -84,11 +84,10 @@ def add_favorite(course_id: str, db: Session = Depends(get_db), user=Depends(get
 def list_my_favorites(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
-    # 如果你也要分頁，可以保留
     page: int = 1,
     page_size: int = 200,
 ):
-    # times 聚合（跟搜尋一模一樣）
+    # times 聚合
     times_sq = (
         db.query(
             CourseTime.course_id.label("cid"),
@@ -111,7 +110,7 @@ def list_my_favorites(
         .subquery()
     )
 
-    # 只列出「我的收藏」：JOIN favorites
+    # 只列出「我的收藏」
     q = (
         db.query(
             Course,

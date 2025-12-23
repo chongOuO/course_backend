@@ -36,7 +36,7 @@ def test_add_student_course_selection(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    # 1) 確認課程存在
+    # 確認課程存在
     course = db.query(Course).filter(Course.id == body.course_id).first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
@@ -45,7 +45,7 @@ def test_add_student_course_selection(
     if not semester:
         raise HTTPException(status_code=400, detail="semester is required (and course.semester is empty)")
 
-    # 2) 避免重複
+    #避免重複
     exists_row = (
         db.query(StudentCourseSelection)
         .filter(
@@ -65,14 +65,14 @@ def test_add_student_course_selection(
             "status": exists_row.status,
         }
 
-    # 3) 檢查衝堂
+    #檢查衝堂
     new_times = (
         db.query(CourseTime)
         .filter(CourseTime.course_id == body.course_id)
         .all()
     )
 
-    # 沒有時間就不做衝堂（可自行改成要擋）
+    # 沒有時間就不做衝堂
     if new_times:
         existing_times = (
             db.query(CourseTime)
@@ -96,7 +96,7 @@ def test_add_student_course_selection(
                 },
             )
 
-    # 4) 寫入
+    #  寫入
     row = StudentCourseSelection(
         user_id=user.id,
         course_id=body.course_id,
@@ -125,7 +125,7 @@ def test_delete_student_course_selection_by_course_id(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    # 1) 課程存在 & 取得 semester
+    #  課程存在 & 取得 semester
     course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")

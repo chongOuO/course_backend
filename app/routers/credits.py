@@ -76,8 +76,6 @@ def my_credit_summary(db: Session = Depends(get_db), user=Depends(get_current_us
     )
     program = sp_row[1] if sp_row else None
 
-    # ===== 改成從 student_course_selections 算：status == "completed" 視為已修得 =====
-    # 如果你不想重複計同一門課（跨學期/重修），就 distinct(Course.id)
     completed_sq = (
         db.query(
             Course.id.label("course_id"),
@@ -121,7 +119,7 @@ def my_credit_summary(db: Session = Depends(get_db), user=Depends(get_current_us
 
     earned_elect = int(earned_total) - int(earned_major) - int(earned_gen)
 
-    # ===== 學程學分：已完成課程（selections completed）∩ program_courses =====
+    #學程學分：已完成課程（selections completed）∩ program_courses
     logger.info(f"[credits] user.id={user.id} type={type(user.id)}")
     logger.info(f"[credits] program.id={(program.id if program else None)} code={(program.code if program else None)}")
     program_earned = 0

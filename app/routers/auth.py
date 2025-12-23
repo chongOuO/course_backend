@@ -58,7 +58,7 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
         raise HTTPException(status_code=403, detail="Invalid credentials")
     profile = db.query(StudentProfile).filter(StudentProfile.user_id == user.id).first()
     if profile is None:
-        profile = StudentProfile(user_id=user.id, student_no=user.username)  # 視你的欄位調整
+        profile = StudentProfile(user_id=user.id, student_no=user.username)  
         db.add(profile)
 
     profile.last_login_at = datetime.now(timezone.utc)
@@ -79,10 +79,9 @@ def forgot_password(body: ForgotPasswordIn, db: Session = Depends(get_db)):
 
     user = db.query(User).filter(User.username == username).first()
     if not user:
-        # 為了避免被枚舉帳號，正式環境通常也回 200
         raise HTTPException(status_code=404, detail="User not found")
 
-    # 產生一次性 token（給使用者）
+    # 產生一次性 token
     raw_token = secrets.token_urlsafe(32)
     token_hash = sha256(raw_token)
 
@@ -113,7 +112,7 @@ def forgot_password(body: ForgotPasswordIn, db: Session = Depends(get_db)):
 
 @router.post("/reset-password")
 def reset_password(body: ResetPasswordIn, db: Session = Depends(get_db)):
-    # body: ResetPasswordIn
+    
     if len(body.new_password.encode("utf-8")) > 72:
         raise HTTPException(stadtus_code=400, detail="Passwor too long (max 72 bytes for bcrypt).")
 
